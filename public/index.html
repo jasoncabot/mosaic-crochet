@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Mosaic Crochet Chart (UK terms)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 2em;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      td {
+        width: 24px;
+        height: 24px;
+        text-align: center;
+        vertical-align: middle;
+        font-family: monospace;
+        font-size: 18px;
+        font-weight: bold;
+        border: 1px solid #ccc;
+      }
+      .light {
+        background-color: #f0f0f0;
+        color: black;
+      }
+      .dark {
+        background-color: #333;
+        color: white;
+      }
+      .row-number {
+        font-weight: normal;
+        background-color: #ddd;
+        color: black;
+        padding-right: 4px;
+        border-right: 2px solid #999;
+      }
+      th {
+        /* Add styling for header cells */
+        font-weight: normal;
+        background-color: #ddd;
+        color: black;
+        border: 1px solid #ccc;
+      }
+      #textureCanvas {
+        /* Style for the new canvas */
+        margin-top: 20px;
+        border: 1px solid black;
+        display: block; /* Ensure canvas is block level */
+      }
+      #generateTextureButton {
+        /* Style for the button */
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Mosaic Crochet Chart (UK terms)</h1>
+    <input type="file" id="imageUpload" accept="image/*" />
+    <p>
+      (40×31 grid. Light/dark rows alternate yarn color. "X" = treble crochet
+      (tr), blank = double crochet (dc))
+    </p>
+    <div id="chartContainer"></div>
+
+    <canvas id="canvas" width="40" height="31" style="display: none"></canvas>
+
+    <h2>Generated Texture Preview</h2>
+    <canvas id="textureCanvas"></canvas>
+    <!-- New canvas for texture -->
+    <button id="generateTextureButton" disabled>
+      Generate Texture Preview
+    </button>
+    <!-- New button -->
+
+    <script>
+      // Store chart data globally for access by the button handler
+      let chartBinaryMatrix = null;
+      let chartWidth = 0;
+      let chartHeight = 0;
+
+      document
+        .getElementById("imageUpload")
+        .addEventListener("change", handleImageUpload);
+      document
+        .getElementById("generateTextureButton")
+        .addEventListener("click", handleGenerateTexture); // Add listener for the new button
+
+      function handleImageUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const img = new Image();
+        const reader = new FileReader();
+
+        reader.onload = function (e) {
+          img.src = e.target.result;
+        };
+
+        reader.readAsDataURL(file);
+
+        img.onload = function () {
+          generateChart(img);
+          // Enable the button after the chart is generated
+          document.getElementById("generateTextureButton").disabled = false;
+        };
+      }
+
+      function generateChart(img) {
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        const width = 40;
+        const height = 31;
+
+        canvas.width = width;
+        canvas.height = height;
+
+        ctx.drawImage(img, 0, 0, width, height);
+        let originalImageData = ctx.getImageData(0, 0, width, height); // Get original data
+
+        // --- Calculate Luminosity from ORIGINAL image ---
+        let originalLuminosityMatrix = [];
+        let originalLuminosityValues = []; // Also store flat list for Otsu
+        const originalPixels = originalImageData.data;
+        for (let y = 0; y < height; y++) {
+          let row = [];
+          for (let x = 0; x < width; x++) {
+            const i = (y * width + x) * 4;
+            const r = originalPixels[i];
+            const g = originalPixels[i + 1];
+            const b = originalPixels[i + 2];
+            // Standard luminosity calculation
+            const luminosity = 0.299 * r + 0.587 * g + 0.114 * b;
+            const clampedLuminosity = Math.max(0, Math.min(255, luminosity));
+            row.push(clampedLuminosity);
+            originalLuminosityValues.push(clampedLuminosity); // Add to flat list
+          }
+          originalLuminosityMatrix.push(row);
+        }
+
+        // --- Otsu's Method for Automatic Thresholding ---
+        // Calculate threshold based on ORIGINAL data
+        const threshold = calculateOtsuThreshold(originalLuminosityValues);
+        console.log("Calculated Otsu Threshold (using original data):", threshold);
+
+        // Binarize using the threshold applied to the ORIGINAL luminosity data
+        const binaryMatrix = originalLuminosityMatrix.map(
+          (row) => row.map((val) => (val > threshold ? 1 : 0)) // 1 = light, 0 = dark
+        );
+
+        // Store data for texture generation
+        chartBinaryMatrix = binaryMatrix;
+        chartWidth = width;
+        chartHeight = height;
+
+        // Generate mosaic crochet chart
+        const table = document.createElement("table");
+        const tbody = document.createElement("tbody");
+        const tfoot = document.createElement("tfoot"); // Create footer
+
+        // Create chart rows (iterate image top-down, build table bottom-up)
+        for (let imgRowIndex = height - 1; imgRowIndex >= 0; imgRowIndex--) {
+          const chartRowNumber = height - imgRowIndex; // Row 1 is at the bottom (imgRowIndex = height - 1)
+          const workingColor = (chartRowNumber - 1) % 2 === 0 ? 1 : 0; // Row 1 (index 0) is light
+
+          const tr = document.createElement("tr");
+
+          // Create cells for stitches
+          for (let x = 0; x < width; x++) {
+            const current = binaryMatrix[imgRowIndex][x];
+            const td = document.createElement("td");
+            td.className = workingColor === 1 ? "light" : "dark";
+
+            let stitch = " "; // Default is double crochet (dc)
+
+            // Check if a treble drop (X) is needed
+            if (current !== workingColor) {
+              // Check 2 rows *above* in the non-reversed matrix
+              const belowRowIndex = imgRowIndex + 2; // Check the row visually below (higher index)
+              if (
+                belowRowIndex < height && // Check bounds
+                binaryMatrix[belowRowIndex][x] === current
+              ) {
+                stitch = "X"; // valid treble drop
+              }
+              // If no valid drop possible, it remains a dc of the working color
+            }
+
+            td.textContent = stitch;
+            tr.appendChild(td);
+          }
+
+          // Display row number (1 at bottom) on the right
+          const label = document.createElement("td");
+          label.className = "row-number";
+          label.textContent = chartRowNumber.toString(); // Display 1-based index
+          tr.appendChild(label);
+
+          tbody.prepend(tr); // Prepend row to the table body
+        }
+        table.appendChild(tbody); // Append body to table
+
+        // Create footer row for column numbers
+        const footerRow = document.createElement("tr");
+        for (let x = 0; x < width; x++) {
+          const th = document.createElement("th");
+          th.textContent = (width - x).toString(); // Numbers from width down to 1 (left to right)
+          footerRow.appendChild(th);
+        }
+        // Add empty corner cell below row numbers
+        const cornerTh = document.createElement("th");
+        cornerTh.className = "row-number"; // Use same class for consistent styling/width
+        footerRow.appendChild(cornerTh);
+        tfoot.appendChild(footerRow);
+        table.appendChild(tfoot); // Append footer to table
+
+        const container = document.getElementById("chartContainer");
+        container.innerHTML = "";
+        container.appendChild(table);
+
+        // Clear previous texture preview if any
+        const textureCanvas = document.getElementById("textureCanvas");
+        const textureCtx = textureCanvas.getContext("2d");
+        textureCtx.clearRect(0, 0, textureCanvas.width, textureCanvas.height);
+        // Disable button until new image is loaded
+        // document.getElementById("generateTextureButton").disabled = true; // Re-enabled in handleImageUpload
+      }
+
+      // --- Otsu's Method Function (ensure it's defined globally or passed) ---
+      function calculateOtsuThreshold(values) {
+        const numPixels = values.length;
+        if (numPixels === 0) return 128; // Default if no pixels
+
+        // Build histogram (256 bins)
+        const histogram = new Array(256).fill(0);
+        values.forEach((v) => {
+          const bin = Math.max(0, Math.min(255, Math.floor(v))); // Clamp index
+          histogram[bin]++;
+        });
+
+        let totalSum = 0;
+        for (let i = 0; i < 256; i++) {
+          totalSum += i * histogram[i];
+        }
+
+        let sumB = 0; // Sum of levels for background
+        let wB = 0; // Weight (pixel count) of background
+        let wF = 0; // Weight (pixel count) of foreground
+        let maxVariance = 0;
+        let threshold = 0;
+
+        for (let t = 0; t < 256; t++) {
+          wB += histogram[t]; // Add pixels in current bin to background
+          if (wB === 0) continue; // Skip if no pixels in background
+
+          wF = numPixels - wB; // Pixels in foreground
+          if (wF === 0) break; // Skip if no pixels left for foreground
+
+          sumB += t * histogram[t]; // Add weighted level to background sum
+
+          const meanB = sumB / wB; // Mean of background
+          const meanF = (totalSum - sumB) / wF; // Mean of foreground
+
+          // Calculate between-class variance
+          const varianceBetween = wB * wF * (meanB - meanF) * (meanB - meanF);
+
+          // Check if new maximum found
+          if (varianceBetween > maxVariance) {
+            maxVariance = varianceBetween;
+            threshold = t;
+          }
+        }
+        // Add 1 to the threshold to match common implementations (threshold is upper bound of background)
+        return threshold + 1;
+      }
+
+      function handleGenerateTexture() {
+        if (!chartBinaryMatrix || chartWidth === 0 || chartHeight === 0) {
+          console.error("Chart data not available for texture generation.");
+          return;
+        }
+        generateTexturePreview(chartBinaryMatrix, chartWidth, chartHeight);
+      }
+
+      function generateTexturePreview(binaryMatrix, width, height) {
+        const textureCanvas = document.getElementById("textureCanvas");
+        const previewSizeMultiplier = 10; // Make the preview larger
+        textureCanvas.width = width * previewSizeMultiplier;
+        textureCanvas.height = height * previewSizeMultiplier;
+        const textureCtx = textureCanvas.getContext("2d");
+
+        // Define colors (adjust as needed)
+        const lightColor = "#f0f0f0";
+        const darkColor = "#333333";
+
+        // Draw the pattern onto the texture canvas based on the binary matrix
+        // Iterate in standard top-to-bottom order for the texture
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            textureCtx.fillStyle =
+              binaryMatrix[y][x] === 1 ? lightColor : darkColor;
+            textureCtx.fillRect(
+              x * previewSizeMultiplier,
+              y * previewSizeMultiplier,
+              previewSizeMultiplier,
+              previewSizeMultiplier
+            );
+          }
+        }
+
+        // --- Basic Three.js setup to display the canvas as a texture ---
+        const scene = new THREE.Scene();
+        // Use an orthographic camera for a flat 2D view
+        const camera = new THREE.OrthographicCamera(
+          textureCanvas.width / -2,
+          textureCanvas.width / 2,
+          textureCanvas.height / 2,
+          textureCanvas.height / -2,
+          1,
+          1000
+        );
+        camera.position.z = 1;
+
+        // Use the existing canvas for the renderer
+        const renderer = new THREE.WebGLRenderer({
+          canvas: textureCanvas,
+          antialias: true,
+          preserveDrawingBuffer: true,
+        });
+        // Set renderer size explicitly to match the canvas
+        renderer.setSize(textureCanvas.width, textureCanvas.height);
+        // Set a background color for the renderer (optional, e.g., white)
+        // renderer.setClearColor(0xffffff, 1);
+
+        // Create texture from the *same canvas* we drew on and are rendering to.
+        // This requires preserveDrawingBuffer: true in the renderer options.
+        const texture = new THREE.CanvasTexture(textureCanvas);
+        texture.needsUpdate = true; // Important!
+
+        // Create a plane geometry to apply the texture to
+        const geometry = new THREE.PlaneGeometry(
+          textureCanvas.width,
+          textureCanvas.height
+        );
+
+        // Create a material using the texture
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+
+        // Create a mesh (object) with the geometry and material
+        const plane = new THREE.Mesh(geometry, material);
+
+        // Add the plane to the scene
+        scene.add(plane);
+
+        // Render the scene
+        // No animation loop needed for a static texture display
+        renderer.render(scene, camera);
+
+        // Optional: Clean up Three.js resources if regenerating often
+        // geometry.dispose();
+        // material.dispose();
+        // texture.dispose(); // Be careful disposing texture if reusing canvas
+      }
+    </script>
+  </body>
+</html>
